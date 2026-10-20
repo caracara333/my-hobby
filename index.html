@@ -26,7 +26,96 @@ async function loadCalendar(){
 }
 function calendarToRow(e){return {id:e.id,user_id:user.id,title:e.title,event_date:e.date,category:e.category||'other',description:e.note||null,game_id:e.game_id||null,source:e.source||'manual'}}
 function rowToCalendar(r){return {id:r.id,title:r.title,date:r.event_date,category:r.category||'other',note:r.description||'',game_id:r.game_id||'',source:r.source||'manual'}}
-async function persistCalendar(){
+async function persistCalendar() {
+  if (!user || !cloudReady) {
+    alert('클라우드 연결 후 다시 시도해 주세요.');
+    return;
+  }
+
+  const old = cloudCalendarSnapshot.map(x => ({ ...x }));
+  const now = calEvents.map(x => ({ ...x }));
+
+  localStorage.setItem(calKey(), JSON.stringify(now));
+  render();
+
+  state('☁ 캘린더 저장 중...');
+
+  try {
+    // 기존 클라우드 일정과 현재 일정을 비교
+    const oldMap = new Map(old.map(x => [x.id, x]));
+
+    // 새로 등록한 일정
+    const added = now.filter(x => !oldMap.has(x.id));
+
+    // 기존 일정 중 수정된 일정
+    const updated = now.filter(x => {
+      const previous = oldMap.get(x.id);
+      return previous &&
+        JSON.stringify(x) !== JSON.stringify(previous);
+    });
+
+    // 삭제된 일정
+    const removed = old.filter(
+      x => !now.some(y => y.id === x.id)
+    );
+
+    // 1. 새 일정 등록: INSERT
+    for (const event of added) {
+      await checked(
+        client
+          .from('calendar_events')
+          .insert(calendarToRow(event))
+      );
+    }
+
+    // 2. 기존 일정 수정: UPDATE
+    for (const event of updated) {
+      await checked(
+        client
+          .from('calendar_events')
+          .update(calendarToRow(event))
+          .eq('id', event.id)
+          .eq('user_id', user.id)
+      );
+    }
+
+    // 3. 일정 삭제: DELETE
+    if (removed.length) {
+      await checked(
+        client
+          .from('calendar_events')
+          .delete()
+          .eq('user_id', user.id)
+          .in('id', removed.map(x => x.id))
+      );
+    }
+
+    // 저장 성공 후 스냅샷 갱신
+    cloudCalendarSnapshot = now.map(x => ({ ...x }));
+
+    localStorage.setItem(calKey(), JSON.stringify(now));
+
+    state('☁ 동기화됨');
+    render();
+
+  } catch (e) {
+    console.error('캘린더 저장 오류:', e);
+
+    // 실패 시 기존 클라우드 상태를 다시 불러오기
+    try {
+      await loadCalendar();
+    } catch (reloadError) {
+      calEvents = old;
+      cloudCalendarSnapshot = old;
+      localStorage.setItem(calKey(), JSON.stringify(old));
+    }
+
+    render();
+    state('⚠ 일정 저장 실패');
+
+    alert('캘린더 저장 실패: ' + e.message);
+  }
+}
  if(!user||!cloudReady){alert('클라우드 연결 후 다시 시도해 주세요.');return}
  const old=cloudCalendarSnapshot.map(x=>({...x})),now=calEvents.map(x=>({...x}));
  localStorage.setItem(calKey(),JSON.stringify(now));render();
